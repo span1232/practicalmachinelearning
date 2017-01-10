@@ -1,0 +1,180 @@
+---
+title: "Practical Machine Learning Project"
+author: "Siqi"
+date: "January 10, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## synopsis
+__Goal__  
+The goal of your project is to predict manner of exercise ("classe") using wrist devices. 
+
+__Steps taken to build model__  
+1. Download file if it does not exsist in working directory  
+2. Assign data as training or testing sets  
+3. Remove useless variables  
+4. Remove columns containing excessive NAs  
+5. Normalise data to mean zero and standard deviation 1  
+6. Find near zero variables and remove them  
+7. Find correlated predictors and compress data using principal component analysis  
+8. Perform cross validation with gradient boosting  
+9. Perform cross validation with random forest  
+10. Verify models using testing set (random forest is better)  
+11. Random forest model on 20 different test cases
+
+__Results__  
+Cross validation with gradient boosting: 79.4% accuracy.  
+Cross validation with random forest: 97.5% accuracy.
+
+
+```{r, echo=FALSE}
+if (!file.exists("pml-training.csv")){
+    URL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+    download.file(URL, "./pml-training.csv")
+}
+
+if (!file.exists("pml-testing.csv")){
+    URL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+    download.file(URL, "./pml-testing.csv")
+}
+```
+
+  
+Assign data as training or testing sets
+```{r, message= FALSE}
+library(caret)
+Dat <- read.csv("pml-training.csv")
+Dat2 <- read.csv("pml-testing.csv")
+
+set.seed(123)
+inTrain = createDataPartition(Dat$classe, p = 3/4)[[1]]
+training = Dat[ inTrain,]
+testing = Dat[-inTrain,]
+```
+
+Remove useless variables
+```{r, message= FALSE}
+#impute dataset
+library(RANN)
+#Create function to detect NAs
+multi.fun <- function(x) {sum(is.na(x))}
+
+#Remove pointless columns
+training <- training[,-c(1,2,3,4,5,6)]
+```
+
+Remove columns containing excessive NAs
+```{r}
+#Apply function and save indices of columns with NAs
+IndicesNA <- ifelse(sapply(training, multi.fun)>0, TRUE, FALSE)
+IndicesNA <- which(IndicesNA, arr.ind = FALSE, useNames = TRUE)
+
+#Dataset columns either has NAs or none. Remove columns with NAs
+training <- training[,-IndicesNA]
+```
+
+Normalise data to mean zero and standard deviation 1
+```{r, cache=TRUE}
+# preProcess function scaling
+set.seed(123)
+preObjScale <- preProcess(training, method= c("center", "scale"))
+trainingStd <- predict(preObjScale, training)
+```
+
+Find near zero variables and remove them
+```{r, cache=TRUE, message= FALSE}
+#compute near zero variables
+nzv <- nearZeroVar(trainingStd, saveMetrics = TRUE) 
+nzv <- nzv[,4] #extract near zero variables column
+trainingStdNzv <- trainingStd[, which(nzv==FALSE)] #remove near zero variables
+```
+
+Find correlated predictors and compress data using principal component analysis
+```{r, cache=TRUE}
+#compute near zero variables
+M <- abs(cor(trainingStdNzv[ , -which(names(trainingStdNzv) %in% c("classe"))])) 
+
+diag(M) <- 0 #
+which(M > 0.8, arr.ind = TRUE)
+plot(which(M > 0.8, arr.ind = TRUE))
+
+set.seed(123)
+prePr <- preProcess(trainingStdNzv, method = "pca", pcaComp = 20)
+trainingStdNzvPca <- predict(prePr, trainingStdNzv)
+
+vars = apply(prePr$rotation, 2, var)
+props <- vars / sum(vars)
+cumsum(props)
+
+```
+
+Perform crossvalidation with gradient boosting
+```{r, cache=TRUE, message= FALSE}
+library(nnet); library(gbm);library(fastAdaboost);library(ada)
+
+set.seed(123)
+fitControl <- trainControl(method = "repeatedcv",
+                           number = 5,
+                           repeats = 1)
+
+set.seed(123)
+fit1 <- train(classe ~ ., data=trainingStdNzvPca, method = "gbm",
+                 trControl = fitControl,
+                 verbose = FALSE)
+
+set.seed(123)
+predictfit1<- predict(fit1, trainingStdNzvPca)
+confusionMatrix(predictfit1, trainingStdNzvPca$classe)[2]
+# Results not fully accurate on training set
+```
+
+Perform cross validation with random forest
+```{r, cache=TRUE, message= FALSE}
+library(randomForest)
+set.seed(123)
+fit2 <- randomForest(classe ~.,
+              data = trainingStdNzvPca
+              ,ntree=1000,
+              importance=TRUE,
+              trControl = fitControl
+              )
+
+predictfit2<- predict(fit2, trainingStdNzvPca)
+confusionMatrix(predictfit2, trainingStdNzvPca$classe)[2]
+#Results accurate on training set
+```
+
+Verify models using testing set
+```{r, cache=TRUE}
+testing1 <- testing[,-c(1,2,3,4,5,6)]
+testing2 <- testing1[,-IndicesNA]
+testingStd <- predict(preObjScale, testing2)
+testingStdNzv <- testingStd[, which(nzv==FALSE)]  
+testingStdNzvPca <- predict(prePr, testingStdNzv)
+
+predictfit1Test <- predict(fit1,testingStdNzvPca)
+confusionMatrix(predictfit1Test, testingStdNzvPca$classe)[3]
+
+predictfit2Test <- predict(fit2,testingStdNzvPca)
+confusionMatrix(predictfit2Test, testingStdNzvPca$classe)[3]
+```
+Accuracy on test data: 
+1.) 79.4% for crossvalidation with gradient boosting and  
+2.) 97.5% cross validation with random forest
+
+Use random forest model on 20 different test cases
+```{r, cache=TRUE}
+Dat3 <- Dat2[,-c(1,2,3,4,5,6)]
+Dat4 <- Dat3[,-IndicesNA]
+Dat5 <- predict(preObjScale, Dat4)
+Dat6 <- Dat5[, which(nzv==FALSE)]  
+Dat7 <- predict(prePr, Dat6)
+
+predictfitDat7 <- predict(fit2,Dat7)
+predictfitDat7
+```
+Results above for 20 different cases as shown
